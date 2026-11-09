@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — NetMon SOC{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-adapter-moment/1.0.1/chartjs-adapter-moment.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="refresh-bar"><div class="refresh-fill" id="rfill"></div></div>
+
+<!-- KPI Row -->
+<div class="summary-row" id="summary-row">
+  <div class="loading">Loading...</div>
+</div>
+
+<!-- Device Grid -->
+<div class="device-grid" id="device-grid"></div>
+
+<!-- Services -->
+<div id="services-section"></div>
+
+<!-- Chart Modal -->
+<div class="modal-overlay" id="chart-modal" onclick="if(event.target===this)closeChart()">
+  <div class="modal-box" style="width:min(880px,96vw);max-height:92vh;overflow-y:auto">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="chart-title"></div>
+        <div id="chart-sub" style="font-size:11px;color:var(--tx-2);margin-top:2px"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select class="select-sm" id="chart-range" onchange="loadCharts()">
+          <option value="60">1 hour</option>
+          <option value="360">6 hours</option>
+          <option value="1440">24 hours</option>
+        </select>
+        <button class="btn-close" onclick="closeChart()">✕</button>
+      </div>
+    </div>
+    <div id="chart-container" style="display:grid;gap:12px"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const REFRESH = 15000;
+let _chartJob = null, _chartType = null, _charts = {};
+
+// ── Helpers ──────────────────────────────────────────────────────────
+const statusStr  = s => ({up:"ONLINE",warning:"WARNING",critical:"CRITICAL",offline:"OFFLINE"}[s]||"?");
+const statusCls  = s => ({up:"status-up",warning:"status-warning",critical:"status-critical",offline:"status-offline"}[s]||"");
+const dotCls     = s => ({up:"dot-green",warning:"dot-yellow",critical:"dot-red",offline:"dot-grey"}[s]||"dot-grey");
+const pctClass   = v => v==null?"":(v>=90?"crit":v>=75?"warn":"");
+
+function fmtBps(v) {
+  if(!v&&v!==0)return"—";
+  if(v>=1e9)return(v/1e9).toFixed(2)+" Gbps";
+  if(v>=1e6)return(v/1e6).toFixed(2)+" Mbps";
+  if(v>=1e3)return(v/1e3).toFixed(1)+" Kbps";
+  return v.toFixed(0)+" bps";
+}
+
+// ── Interface table ───────────────────────────────────────────────────
+function renderIfaces(ifaces, traffic, errors) {
+  const relevant = (ifaces||[]).filter(i=>i.alias||i.status===1);
+  if(!relevant.length) return `<tr><td colspan="5" style="color:var(--tx-2);padding:8px">No interfaces found</td></tr>`;
+
+  const tMap={}, eMap={};
+  (traffic||[]).forEach(t=>tMap[t.name]=t);
+  (errors||[]).forEach(e=>eMap[e.name]=e);
+
+  return relevant.map(ifc=>{
+    const t=tMap[ifc.name]||{}, e=eMap[ifc.name]||{};
+    const up=ifc.status===1;
+    const err=(e.in_errors||0)+(e.out_errors||0);
+    const alias=ifc.alias?`<div style="color:var(--tx-2);font-size:10px">${ifc.alias}</div>`:"";
+    const stCell=ifc.admin_status&&ifc.admin_status!==1
+      ?`<span style="color:var(--tx-2)">disabled</span>`
+      :`<span class="${up?"if-up":"if-down"}">${up?"UP":"DOWN"}</span>`;
+    return `<tr>
+      <td style="font-family:var(--font-mono);font-size:11px">${ifc.name}${alias}</td>
+      <td>${stCell}</td>
+      <td style="color:var(--green);font-size:11px;font-family:var(--font-mono)">${t.in_bps_str||"—"}</td>
+      <td style="color:var(--yellow);font-size:11px;font-family:var(--font-mono)">${t.out_bps_str||"—"}</td>
+      <td class="${err>0?"if-err":"if-ok"}" style="font-size:11px;font-family:var(--font-mono)">${err>0?err.toFixed(2)+"/s":"0"}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Server card ───────────────────────────────────────────────────────
+function renderServer(sm) {
+  if(!sm) return `<div style="color:var(--tx-2);font-size:12px">Node Exporter not responding</div>`;
+  if(sm.cpu_percent==null) return `<div style="color:var(--tx-2);font-size:12px">Waiting for metrics...</div>`;
+
+  const fmt=v=>v!=null?v.toFixed(1)+"%":"N/A";
+  const cc=pctClass(sm.cpu_percent), mc=pctClass(sm.mem_used_percent), dc=pctClass(sm.disk_used_percent);
+
+  return `
+    <div class="sec-label">System Resources</div>
+    <div class="metric-row">
+      <div class="metric-box"><div class="mb-label">CPU</div><div class="mb-value ${cc}">${fmt(sm.cpu_percent)}</div>
+        <div class="progress"><div class="progress-bar ${cc}" style="width:${Math.min(sm.cpu_percent||0,100)}%"></div></div></div>
+      <div class="metric-box"><div class="mb-label">Memory</div><div class="mb-value ${mc}">${fmt(sm.mem_used_percent)}</div>
+        <div class="progress"><div class="progress-bar ${mc}" style="width:${Math.min(sm.mem_used_percent||0,100)}%"></div></div></div>
+      <div class="metric-box"><div class="mb-label">Disk</div><div class="mb-value ${dc}">${fmt(sm.disk_used_percent)}</div>
+        <div class="progress"><div class="progress-bar ${dc}" style="width:${Math.min(sm.disk_used_percent||0,100)}%"></div></div></div>
+    </div>
+    ${sm.http_rps!=null||sm.dns_qps!=null?`
+    <div class="sec-label" style="margin-top:9px">Service Metrics</div>
+    <div class="stat-row">
+      ${sm.http_rps!=null?sbox("HTTP req/s",sm.http_rps.toFixed(2),"var(--blue)"):""}
+      ${sm.dns_qps!=null?sbox("DNS q/s",sm.dns_qps.toFixed(2),"var(--purple)"):""}
+      ${sm.tcp_connections!=null?sbox("TCP Conn",sm.tcp_connections,"var(--teal)"):""}
+      ${sm.nginx_active_conn!=null?sbox("Nginx Conn",sm.nginx_active_conn,"var(--green)"):""}
+    </div>`:""}
+    ${sm.net_in_bps!=null?`
+    <div class="extra-row" style="margin-top:7px">
+      <div class="extra-box"><div class="ex-label">Net IN</div><div class="ex-val" style="color:var(--green)">${fmtBps(sm.net_in_bps)}</div></div>
+      <div class="extra-box"><div class="ex-label">Net OUT</div><div class="ex-val" style="color:var(--yellow)">${fmtBps(sm.net_out_bps)}</div></div>
+      ${sm.load1!=null?`<div class="extra-box"><div class="ex-label">Load 1m</div><div class="ex-val" style="color:${sm.load1>2?"var(--red)":sm.load1>1?"var(--yellow)":"var(--green)"}">${sm.load1}</div></div>`:""}
+    </div>`:""}`;
+}
+
+const sbox=(l,v,c)=>`<div class="stat-box"><div class="sb-val" style="color:${c}">${v}</div><div class="sb-label">${l}</div></div>`;
+
+// ── Device card ───────────────────────────────────────────────────────
+function renderDevice(d) {
+  let body="";
+  if(d.status==="offline") {
+    body=`<div style="color:var(--tx-2);font-size:12px">Cannot connect — ping to <span style="font-family:var(--font-mono);color:var(--red)">${d.ip}</span> failed</div>`;
+  } else if(d.type==="server") {
+    body=renderServer(d.server_metrics);
+  } else {
+    body=`
+      <div class="sec-label">Interfaces</div>
+      <table class="iface-table"><thead><tr>
+        <th>Interface</th><th>Status</th><th>IN</th><th>OUT</th><th>Errors/s</th>
+      </tr></thead><tbody>${renderIfaces(d.interfaces,d.traffic,d.errors)}</tbody></table>`;
+  }
+  return `
+    <div class="device-card ${d.status}">
+      <div class="dc-header">
+        <div>
+          <div class="dc-name">${d.name}</div>
+          <div class="dc-sub">${d.ip} · ${d.description||d.role}</div>
+        </div>
+        <div class="dc-actions">
+          <div class="dc-status"><div class="dot ${dotCls(d.status)}"></div>
+            <span class="${statusCls(d.status)}">${statusStr(d.status)}</span></div>
+          <button class="btn-chart" onclick="openChart('${d.job}','${d.type}','${d.name}')">Chart</button>
+        </div>
+      </div>
+      <div class="dc-body">
+        <div class="dc-uptime">Uptime: <b>${d.uptime_str||"N/A"}</b></div>
+        ${body}
+      </div>
+    </div>`;
+}
+
+// ── Services ──────────────────────────────────────────────────────────
+function renderServices(svcs) {
+  if(!svcs||!svcs.length) return "";
+  return `
+    <div class="sec-label" style="margin-bottom:9px">Service Health</div>
+    <div class="svc-row">
+      ${svcs.map(s=>`
+        <div class="svc-card ${s.status==="up"?"up":"down"}">
+          <div class="svc-top"><span class="svc-name">${s.name}</span>
+            <span class="svc-status">${s.status==="up"?"UP":"DOWN"}</span></div>
+          <div class="svc-meta">${(s.type||"").toUpperCase()}${s.port?":"+s.port:""} ${s.latency_ms?s.latency_ms+"ms":""}</div>
+          ${s.error?`<div class="svc-err">${s.error}</div>`:""}
+        </div>`).join("")}
+    </div>`;
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────
+async function openChart(job, type, name) {
+  _chartJob=job; _chartType=type;
+  document.getElementById("chart-title").textContent=name;
+  document.getElementById("chart-sub").textContent=`job: ${job}`;
+  document.getElementById("chart-modal").style.display="flex";
+  await loadCharts();
+}
+function closeChart() {
+  document.getElementById("chart-modal").style.display="none";
+  Object.values(_charts).forEach(c=>c&&c.destroy()); _charts={};
+  document.getElementById("chart-container").innerHTML="";
+}
+async function loadCharts() {
+  if(!_chartJob) return;
+  const minutes=parseInt(document.getElementById("chart-range").value);
+  const cont=document.getElementById("chart-container");
+  cont.innerHTML=`<div class="loading">Loading...</div>`;
+  try {
+    const d=await(await fetch(`/api/chart/${_chartJob}?minutes=${minutes}&type=${_chartType}`)).json();
+    if(d.status!=="ok"||!d.charts){cont.innerHTML=`<div style="color:var(--tx-2);padding:16px">No data available</div>`;return;}
+    Object.values(_charts).forEach(c=>c&&c.destroy()); _charts={}; cont.innerHTML="";
+    const defs=_chartType==="server"?[
+      {key:"cpu",label:"CPU %",color:"#3b82f6",unit:"%"},
+      {key:"mem",label:"Memory %",color:"#a855f7",unit:"%"},
+      {key:"disk",label:"Disk %",color:"#f59e0b",unit:"%"},
+      {key:"net_in",label:"Net IN",color:"#22c55e",unit:"bps"},
+      {key:"net_out",label:"Net OUT",color:"#eab308",unit:"bps"},
+      {key:"load",label:"Load Avg",color:"#ef4444",unit:""},
+      {key:"http_rps",label:"HTTP req/s",color:"#14b8a6",unit:"/s"},
+      {key:"dns_qps",label:"DNS q/s",color:"#8b5cf6",unit:"/s"},
+    ]:[
+      {key:"traffic_in",label:"Traffic IN",color:"#22c55e",unit:"bps"},
+      {key:"traffic_out",label:"Traffic OUT",color:"#eab308",unit:"bps"},
+      {key:"errors",label:"Errors/s",color:"#ef4444",unit:"/s"},
+    ];
+    const dark=!document.body.classList.contains("light");
+    const grid=dark?"rgba(28,42,58,.7)":"rgba(0,0,0,.08)";
+    const tick=dark?"#4b6a8a":"#64748b";
+    defs.forEach(def=>{
+      const data=d.charts[def.key];
+      if(!data||!data.length) return;
+      const wrap=document.createElement("div");
+      wrap.style.cssText="background:var(--bg-2);border:1px solid var(--bdr-1);border-radius:6px;padding:12px";
+      wrap.innerHTML=`<div style="font-size:10px;font-weight:600;color:var(--tx-2);letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px">${def.label}</div>
+        <div style="height:115px;position:relative"><canvas id="c-${def.key}"></canvas></div>`;
+      cont.appendChild(wrap);
+      const ctx=wrap.querySelector(`#c-${def.key}`).getContext("2d");
+      _charts[def.key]=new Chart(ctx,{
+        type:"line",
+        data:{datasets:[{data:data.map(p=>({x:p[0],y:p[1]})),borderColor:def.color,
+          backgroundColor:def.color+"18",borderWidth:1.5,pointRadius:0,tension:0.3,fill:true}]},
+        options:{responsive:true,maintainAspectRatio:false,animation:{duration:200},
+          plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>{
+            const v=ctx.parsed.y;
+            if(def.unit==="bps")return v>=1e6?`${(v/1e6).toFixed(2)} Mbps`:`${v.toFixed(0)} bps`;
+            if(def.unit==="%") return `${v.toFixed(1)}%`;
+            return `${v.toFixed(2)}${def.unit}`;
+          }}}},
+          scales:{x:{type:"time",time:{unit:"minute",displayFormats:{minute:"HH:mm"}},
+            ticks:{color:tick,maxTicksLimit:6},grid:{color:grid}},
+            y:{ticks:{color:tick},grid:{color:grid}}}}
+      });
+    });
+    if(!cont.children.length) cont.innerHTML=`<div style="color:var(--tx-2);padding:16px">No data available (need ~5 minutes)</div>`;
+  } catch(exc) { cont.innerHTML=`<div style="color:var(--red);padding:16px">Error: ${exc.message}</div>`; }
+}
+
+// ── Fetch data ────────────────────────────────────────────────────────
+async function fetchData() {
+  try {
+    const [sr, dr, svr] = await Promise.all([
+      fetch("/api/summary"), fetch("/api/devices"), fetch("/api/services")
+    ]);
+    const sum=await sr.json(), dd=await dr.json(), svcd=await svr.json();
+
+    document.getElementById("summary-row").innerHTML=`
+      <div class="kpi-card"><div class="kpi-label">Total devices</div><div class="kpi-value">${sum.total||0}</div></div>
+      <div class="kpi-card green"><div class="kpi-label">Online</div><div class="kpi-value">${sum.up||0}</div></div>
+      <div class="kpi-card ${(sum.offline||0)>0?"red":""}"><div class="kpi-label">Offline</div><div class="kpi-value">${sum.offline||0}</div></div>
+      <div class="kpi-card ${(sum.warning||0)>0?"yellow":""}"><div class="kpi-label">Warning</div><div class="kpi-value">${sum.warning||0}</div></div>
+      <div class="kpi-card ${(sum.critical||0)>0?"red":""}"><div class="kpi-label">Critical</div><div class="kpi-value">${sum.critical||0}</div></div>
+      <div class="kpi-card ${(sum.if_down||0)>0?"red":"teal"}"><div class="kpi-label">IF Down</div><div class="kpi-value">${sum.if_down||0}</div></div>`;
+
+    if(dd.status==="ok")
+      document.getElementById("device-grid").innerHTML=dd.data.map(renderDevice).join("");
+    document.getElementById("services-section").innerHTML=renderServices(svcd.services||[]);
+  } catch(exc){ console.error("[dashboard]", exc); }
+}
+
+function refresh() {
+  const fill=document.getElementById("rfill");
+  fill.style.transition="none"; fill.style.width="0%";
+  setTimeout(()=>{ fill.style.transition=`width ${REFRESH/1000}s linear`; fill.style.width="100%"; },50);
+  fetchData();
+}
+
+refresh();
+setInterval(refresh, REFRESH);
+</script>
+{% endblock %}

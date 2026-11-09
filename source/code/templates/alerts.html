@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Alerts — NetMon SOC{% endblock %}
+{% block page_title %}Alerts{% endblock %}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- KPI Row -->
+<div class="summary-row" id="kpi-row" style="grid-template-columns:repeat(5,1fr)">
+  <div class="loading">Loading...</div>
+</div>
+
+<!-- Filter bar -->
+<div class="sticky-bar">
+  <button class="btn-filter active" onclick="setFilter('all',this)">All</button>
+  <button class="btn-filter" onclick="setFilter('critical',this)">Critical</button>
+  <button class="btn-filter" onclick="setFilter('warning',this)">Warning</button>
+  <button class="btn-filter" onclick="setFilter('suricata',this)">IDS</button>
+  <button class="btn-filter" onclick="setFilter('ai',this)">AI</button>
+  <button class="btn-filter" onclick="setFilter('unresolved',this)">Pending</button>
+
+  <div style="width:1px;height:22px;background:var(--bdr-1);margin:0 4px"></div>
+
+  <input class="date-input" type="date" id="filter-from" onchange="loadAlerts()" placeholder="From date">
+  <span style="font-size:11px;color:var(--tx-2)">→</span>
+  <input class="date-input" type="date" id="filter-to"   onchange="loadAlerts()" placeholder="To date">
+  <button class="btn-filter" onclick="clearDates()">Clear</button>
+
+  <div style="margin-left:auto;display:flex;gap:6px">
+    <button class="btn-chart" onclick="openTimeline()">📈 Timeline</button>
+    <button class="btn-danger" onclick="confirmClear()">🗑 Delete all</button>
+  </div>
+</div>
+
+<!-- Alert list -->
+<div class="alert-list-wrap">
+  <div class="alert-list-header" onclick="toggleList()">
+    <span style="font-size:13px;font-weight:600;color:var(--tx-0)">
+      Alert List — <span id="list-count">—</span>
+    </span>
+    <span class="toggle-hint" id="list-toggle">collapse</span>
+  </div>
+  <div class="alert-list-scroll" id="alert-scroll">
+    <div class="alert-head">
+      <span>Time</span><span>Device</span>
+      <span>Severity</span><span>Type</span>
+      <span>Message</span><span>Action</span>
+    </div>
+    <div id="alert-rows"><div class="loading" style="padding:16px">Loading...</div></div>
+  </div>
+</div>
+
+<!-- Timeline Modal -->
+<div class="modal-overlay" id="timeline-modal" onclick="if(event.target===this)closeTimeline()">
+  <div class="modal-box" style="width:min(820px,96vw);max-height:90vh;overflow-y:auto">
+    <div class="modal-header">
+      <div class="modal-title">📈 Alert Timeline</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select class="select-sm" id="tl-bucket" onchange="loadTimeline()">
+          <option value="hour">By Hour</option>
+          <option value="day" selected>By Day</option>
+          <option value="week">By Week</option>
+          <option value="month">By Month</option>
+        </select>
+        <input class="date-input" type="date" id="tl-from" onchange="loadTimeline()">
+        <span style="font-size:11px;color:var(--tx-2)">→</span>
+        <input class="date-input" type="date" id="tl-to"   onchange="loadTimeline()">
+        <button class="btn-close" onclick="closeTimeline()">✕</button>
+      </div>
+    </div>
+    <div style="height:280px;position:relative"><canvas id="timeline-chart"></canvas></div>
+    <div id="tl-summary" style="margin-top:12px;font-size:12px;color:var(--tx-2)"></div>
+  </div>
+</div>
+
+<!-- Resolve Modal -->
+<div class="modal-overlay" id="resolve-modal" onclick="if(event.target===this)closeResolve()">
+  <div class="modal-box" style="width:min(420px,95vw)">
+    <div class="modal-header">
+      <div class="modal-title"> Resolve Alert</div>
+      <button class="btn-close" onclick="closeResolve()">✕</button>
+    </div>
+    <div id="resolve-desc" style="font-size:12px;color:var(--tx-2);margin-bottom:14px;line-height:1.5"></div>
+    <form class="resolve-form" onsubmit="submitResolve(event)">
+      <input type="hidden" id="resolve-id">
+      <label>Resolver *</label>
+      <input type="text" id="resolve-by" placeholder="Your name" required>
+      <label>Resolution note</label>
+      <textarea id="resolve-note" placeholder="Brief description of how it was resolved..."></textarea>
+      <button type="submit" class="btn-submit">Mark as Resolved</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _filter = "all", _listOpen = true, _tlChart = null;
+
+const SEV_TAG = {
+  critical: "sev-critical", warning: "sev-warning",
+  info: "sev-info", "ai-anomaly": "sev-ai", suricata: "sev-suricata"
+};
+
+function fmtTs(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso), now = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  const hm  = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const days = Math.floor((now - d) / 86400000);
+  if (days === 0) return hm;
+  if (days === 1) return `Yesterday\n${hm}`;
+  const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${d.getDate()}/${mo[d.getMonth()]}\n${hm}`;
+}
+
+// ── KPI ──────────────────────────────────────────────────────────────
+async function loadKpi() {
+  const d = await (await fetch("/api/alerts/stats")).json();
+  document.getElementById("kpi-row").innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Total</div><div class="kpi-value">${d.total}</div></div>
+    <div class="kpi-card red"><div class="kpi-label">Critical</div><div class="kpi-value">${d.critical}</div></div>
+    <div class="kpi-card yellow"><div class="kpi-label">Warning</div><div class="kpi-value">${d.warning}</div></div>
+    <div class="kpi-card purple"><div class="kpi-label">AI Anomaly</div><div class="kpi-value">${d.ai}</div></div>
+    <div class="kpi-card ${d.unresolved > 0 ? "yellow" : ""}"><div class="kpi-label">Pending</div><div class="kpi-value">${d.unresolved}</div></div>`;
+}
+
+// ── Alert list ────────────────────────────────────────────────────────
+function setFilter(val, btn) {
+  _filter = val;
+  document.querySelectorAll(".sticky-bar .btn-filter").forEach(b => b.className = "btn-filter");
+  btn.className = "btn-filter active";
+  if (val === "critical") btn.className += " active-red";
+  if (val === "warning")  btn.className += " active-yellow";
+  if (val === "ai")       btn.className += " active-purple";
+  loadAlerts();
+}
+
+function clearDates() {
+  document.getElementById("filter-from").value = "";
+  document.getElementById("filter-to").value   = "";
+  loadAlerts();
+}
+
+function toggleList() {
+  _listOpen = !_listOpen;
+  document.getElementById("alert-scroll").classList.toggle("collapsed", !_listOpen);
+  document.getElementById("list-toggle").textContent = _listOpen ? "collapse" : "expand";
+}
+
+async function loadAlerts() {
+  let url = "/api/alerts?limit=300";
+  if (_filter === "critical")   url += "&severity=critical";
+  if (_filter === "warning")    url += "&severity=warning";
+  if (_filter === "ai")         url += "&category=ai-anomaly";
+  if (_filter === "suricata")   url += "&category=suricata";
+  if (_filter === "unresolved") url += "&status=unresolved";
+
+  const from = document.getElementById("filter-from").value;
+  const to   = document.getElementById("filter-to").value;
+  if (from) url += `&from=${from}T00:00:00`;
+  if (to)   url += `&to=${to}T23:59:59`;
+
+  const d    = await (await fetch(url)).json();
+  const rows = document.getElementById("alert-rows");
+  document.getElementById("list-count").textContent = `${d.total} alerts`;
+
+  if (!d.alerts?.length) {
+    rows.innerHTML = `<div class="empty"><div class="empty-head">No alerts found</div></div>`;
+    return;
+  }
+
+  rows.innerHTML = d.alerts.map(a => {
+    const ts     = fmtTs(a.timestamp).replace("\n", "<br>");
+    const isAI   = a.category === "ai-anomaly";
+    const isSoc  = a.category === "suricata";
+    const tagCls = SEV_TAG[isSoc ? "suricata" : isAI ? "ai-anomaly" : a.severity] || "sev-info";
+    const catLbl = isSoc ? "IDS" : isAI ? "AI" : a.category;
+
+    let action = "";
+    if (a.resolved) {
+      const mode  = a.resolve_mode === "auto" ? "auto" : (a.resolved_by || "?");
+      const color = a.resolve_mode === "auto" ? "var(--tx-2)" : "var(--green)";
+      action = `<span style="color:${color};font-size:11px;font-family:var(--font-mono)">${mode}</span>`;
+    } else {
+      const safeMsg = (a.message || "").replace(/'/g,"").replace(/"/g,"").substring(0,60);
+      const safeDev = (a.device  || "").replace(/'/g,"");
+      action = `<button class="btn-resolve" onclick="openResolve('${a.id}','${safeDev}','${safeMsg}')">Resolve</button>`;
+    }
+
+    return `<div class="alert-row ${a.resolved ? "resolved" : ""}">
+      <span class="alert-ts">${ts}</span>
+      <span style="font-weight:600;font-size:12px">${a.device}</span>
+      <span><span class="sev-tag ${tagCls}">${a.severity.toUpperCase()}</span></span>
+      <span style="font-size:11px;color:var(--tx-2)">${catLbl}</span>
+      <span class="alert-msg" title="${a.message}">${a.message}</span>
+      <span>${action}</span>
+    </div>`;
+  }).join("");
+}
+
+// ── Resolve ───────────────────────────────────────────────────────────
+function openResolve(id, device, msg) {
+  document.getElementById("resolve-id").value   = id;
+  document.getElementById("resolve-by").value   = "";
+  document.getElementById("resolve-note").value = "";
+  document.getElementById("resolve-desc").textContent = `${device} — ${msg}`;
+  document.getElementById("resolve-modal").style.display = "flex";
+  setTimeout(() => document.getElementById("resolve-by").focus(), 80);
+}
+function closeResolve() { document.getElementById("resolve-modal").style.display = "none"; }
+
+async function submitResolve(e) {
+  e.preventDefault();
+  const id   = document.getElementById("resolve-id").value;
+  const by   = document.getElementById("resolve-by").value.trim();
+  const note = document.getElementById("resolve-note").value.trim();
+  if (!by) return;
+  const r = await fetch(`/api/alerts/${id}/resolve`, {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({resolved_by: by, note}),
+  });
+  if ((await r.json()).status === "ok") {
+    closeResolve();
+    showToast(` Resolved by ${by}`, "success");
+    loadAlerts(); loadKpi();
+  }
+}
+
+async function confirmClear() {
+  if (!confirm("Delete all alert history?")) return;
+  await fetch("/api/alerts/clear", {method: "POST"});
+  loadAlerts(); loadKpi();
+  showToast("Deleted alert history");
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────
+function openTimeline() {
+  const to   = new Date(), from = new Date();
+  from.setDate(from.getDate() - 30);
+  if (!document.getElementById("tl-to").value)
+    document.getElementById("tl-to").value   = to.toISOString().substring(0,10);
+  if (!document.getElementById("tl-from").value)
+    document.getElementById("tl-from").value = from.toISOString().substring(0,10);
+  document.getElementById("timeline-modal").style.display = "flex";
+  loadTimeline();
+}
+function closeTimeline() { document.getElementById("timeline-modal").style.display = "none"; }
+
+async function loadTimeline() {
+  const bucket = document.getElementById("tl-bucket").value;
+  const from   = document.getElementById("tl-from").value;
+  const to     = document.getElementById("tl-to").value;
+  if (!from || !to) return;
+
+  const d      = await (await fetch(`/api/alerts/history?bucket=${bucket}&from=${from}T00:00:00&to=${to}T23:59:59`)).json();
+  const series = d.series || [];
+  const dark   = !document.body.classList.contains("light");
+  const grid   = dark ? "rgba(28,42,58,.6)" : "rgba(0,0,0,.07)";
+  const tick   = dark ? "#4b6a8a" : "#64748b";
+
+  if (_tlChart) _tlChart.destroy();
+  _tlChart = new Chart(document.getElementById("timeline-chart").getContext("2d"), {
+    type: "line",
+    data: {
+      labels: series.map(s => s.label),
+      datasets: [
+        {label:"Critical",data:series.map(s=>s.critical||0),borderColor:"#ef4444",backgroundColor:"rgba(239,68,68,.07)",borderWidth:2,pointRadius:3,tension:0.35,fill:true},
+        {label:"Warning", data:series.map(s=>s.warning||0), borderColor:"#eab308",backgroundColor:"rgba(234,179,8,.05)",borderWidth:2,pointRadius:3,tension:0.35,fill:true},
+      ],
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false, animation:{duration:300},
+      plugins:{legend:{labels:{color:tick,font:{size:11}}},tooltip:{mode:"index",intersect:false}},
+      scales:{x:{ticks:{color:tick,maxTicksLimit:10},grid:{color:grid}},
+              y:{beginAtZero:true,ticks:{color:tick,precision:0},grid:{color:grid}}},
+    },
+  });
+
+  const tc = series.reduce((a,s)=>a+(s.critical||0),0);
+  const tw = series.reduce((a,s)=>a+(s.warning||0),0);
+  document.getElementById("tl-summary").textContent =
+    `${from} → ${to}  |  Critical: ${tc}  |  Warning: ${tw}  |  Total: ${tc+tw}`;
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────
+loadKpi();
+loadAlerts();
+setInterval(()=>{loadKpi();loadAlerts();}, 15000);
+</script>
+{% endblock %}

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}NetMon SOC{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="/">
+      <div class="logo-mark">NS</div>
+      <div>
+        <div class="logo-text">NetMon SOC</div>
+        <div class="logo-sub">v1.0 · 10.20.0.0/16</div>
+      </div>
+    </a>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section">Monitor</div>
+    <a href="/dashboard" class="nav-item {% if request.path=='/dashboard' %}active{% endif %}">
+      <span>⬡</span> Dashboard
+    </a>
+    <a href="/alerts" class="nav-item {% if request.path=='/alerts' %}active{% endif %}">
+      <span>🔔</span> Alerts
+      <span class="nav-badge" id="badge-unresolved" style="display:none"></span>
+    </a>
+
+    <div class="nav-section">Security</div>
+    <a href="/soc" class="nav-item {% if request.path=='/soc' %}active{% endif %}">
+      <span>🛡️</span> SOC / IDS
+      <span class="nav-badge-info">Suricata</span>
+    </a>
+
+    <div class="nav-section">Intelligence</div>
+    <a href="/ai" class="nav-item {% if request.path=='/ai' %}active{% endif %}">
+      <span>🤖</span> AI Agent
+      <span class="nav-badge-info">AI</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="version">NetMon SOC v1.0</div>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+    <div class="topbar-right">
+      <button class="btn-icon" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">🌙</button>
+      <div class="status-chip" id="prom-chip">
+        <div class="dot dot-grey"></div> Prometheus
+      </div>
+    </div>
+  </header>
+  <div class="content">{% block content %}{% endblock %}</div>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ── Clock ────────────────────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById("clock").textContent =
+    new Date().toLocaleTimeString("vi-VN");
+}, 1000);
+
+// ── Unresolved badge ─────────────────────────────────────────────────
+async function _refreshBadge() {
+  try {
+    const d  = await (await fetch("/api/alerts/stats")).json();
+    const el = document.getElementById("badge-unresolved");
+    if (d.unresolved > 0) {
+      el.textContent = d.unresolved;
+      el.style.display = "inline-block";
+    } else {
+      el.style.display = "none";
+    }
+    // Prometheus status chip
+    const chip = document.getElementById("prom-chip");
+    if (chip) {
+      chip.innerHTML = `<div class="dot dot-green"></div> Prometheus`;
+    }
+  } catch (_) {
+    const chip = document.getElementById("prom-chip");
+    if (chip) chip.innerHTML = `<div class="dot dot-red"></div> Prometheus`;
+  }
+}
+setInterval(_refreshBadge, 10000);
+_refreshBadge();
+
+// ── Toast ────────────────────────────────────────────────────────────
+function showToast(msg, type = "info") {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className   = `toast show toast-${type}`;
+  setTimeout(() => { t.className = "toast"; }, 3000);
+}
+
+// ── Theme ────────────────────────────────────────────────────────────
+function _applyTheme(theme) {
+  document.body.classList.toggle("light", theme === "light");
+  const btn = document.getElementById("theme-btn");
+  if (btn) btn.textContent = theme === "light" ? "🌙" : "☀️";
+}
+function toggleTheme() {
+  const cur  = localStorage.getItem("nm-theme") || "dark";
+  const next = cur === "dark" ? "light" : "dark";
+  localStorage.setItem("nm-theme", next);
+  _applyTheme(next);
+}
+_applyTheme(localStorage.getItem("nm-theme") || "dark");
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

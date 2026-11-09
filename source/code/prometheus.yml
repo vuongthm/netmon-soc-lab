@@ -1,0 +1,87 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # ── SNMP: pfSense ────────────────────────────────────────────────
+  - job_name: "snmp-pfsense"
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      target: ["172.24.0.115"]
+    static_configs:
+      - targets: ["localhost:9116"]
+        labels: {device: "pfSense", role: "firewall", owner: "tuan"}
+    relabel_configs:
+      - source_labels: [__param_target]
+        target_label: instance
+
+  # ── SNMP: Core-Router ────────────────────────────────────────────
+  - job_name: "snmp-core-router"
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      target: ["10.20.0.1"]
+    static_configs:
+      - targets: ["localhost:9116"]
+        labels: {device: "Core-Router", role: "router", owner: "vuong"}
+    relabel_configs:
+      - source_labels: [__param_target]
+        target_label: instance
+
+  # ── SNMP: SwL3A ──────────────────────────────────────────────────
+  - job_name: "snmp-swl3a"
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      target: ["10.20.0.2"]
+    static_configs:
+      - targets: ["localhost:9116"]
+        labels: {device: "SwL3A", role: "switch", owner: "vuong"}
+    relabel_configs:
+      - source_labels: [__param_target]
+        target_label: instance
+
+  # ── SNMP: SwL3B ──────────────────────────────────────────────────
+  - job_name: "snmp-swl3b"
+    metrics_path: /snmp
+    params:
+      module: [if_mib]
+      target: ["10.20.0.3"]
+    static_configs:
+      - targets: ["localhost:9116"]
+        labels: {device: "SwL3B", role: "switch", owner: "tuan"}
+    relabel_configs:
+      - source_labels: [__param_target]
+        target_label: instance
+
+  # ── Node Exporter: Server02 (Web) ────────────────────────────────
+  - job_name: "node-server02"
+    static_configs:
+      - targets: ["10.20.200.10:9100"]
+        labels: {device: "Server02", role: "web", owner: "vuong"}
+
+  # ── Node Exporter: Server01 (DNS+FTP) ────────────────────────────
+  - job_name: "node-server01"
+    static_configs:
+      - targets: ["10.20.201.10:9100"]
+        labels: {device: "Server01", role: "dns-ftp", owner: "vuong"}
+
+  # ── mtail: Nginx (Server02) ───────────────────────────────────────
+  - job_name: "mtail-nginx"
+    static_configs:
+      - targets: ["10.20.200.10:3903"]
+        labels: {device: "Server02"}
+
+  # ── mtail: DNS (Server01) ─────────────────────────────────────────
+  - job_name: "mtail-dns"
+    static_configs:
+      - targets: ["10.20.201.10:3904"]
+        labels: {device: "Server01"}
+
+  # ── mtail: FTP (Server01) ─────────────────────────────────────────
+  - job_name: "mtail-ftp"
+    static_configs:
+      - targets: ["10.20.201.10:3905"]
+        labels: {device: "Server01"}

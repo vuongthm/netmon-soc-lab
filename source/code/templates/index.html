@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetMon SOC</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg:#07090d;--blue:#3b82f6;--green:#22c55e;--tx0:#f1f5f9;--tx1:#94a3b8;--tx2:#4b6a8a;--bdr:rgba(59,130,246,.15);--mono:'JetBrains Mono',monospace; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--bg);color:var(--tx0);font-family:'Inter',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 20px}
+    .page{max-width:900px;width:100%;text-align:center}
+    .badge{display:inline-flex;align-items:center;gap:8px;background:rgba(59,130,246,.06);border:1px solid var(--bdr);border-radius:20px;padding:4px 14px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--blue);margin-bottom:24px}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 1.5s infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+    h1{font-size:clamp(42px,7vw,76px);font-weight:900;background:linear-gradient(135deg,#fff 20%,var(--blue) 70%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:12px}
+    .sub{font-size:16px;color:var(--tx1);margin-bottom:36px;font-weight:300;line-height:1.7}
+    .cta{display:inline-flex;align-items:center;gap:12px;background:linear-gradient(135deg,#1e40af,var(--blue));color:#fff;font-family:var(--mono);font-size:13px;padding:14px 34px;border-radius:5px;text-decoration:none;box-shadow:0 0 40px rgba(59,130,246,.3);transition:transform .2s,box-shadow .2s}
+    .cta:hover{transform:translateY(-2px);box-shadow:0 0 60px rgba(59,130,246,.5)}
+    .stats{display:flex;justify-content:center;gap:36px;margin:40px 0;flex-wrap:wrap}
+    .stat-num{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--blue);display:block}
+    .stat-label{font-size:10px;color:var(--tx2);letter-spacing:.1em;text-transform:uppercase;margin-top:2px}
+    .divider{width:1px;background:var(--bdr);align-self:stretch}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:32px 0}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    .card{background:rgba(12,16,24,.7);border:1px solid var(--bdr);border-radius:7px;padding:16px;text-align:left}
+    .card-name{font-family:var(--mono);font-size:13px;color:var(--blue);margin-bottom:3px}
+    .card-ip{font-size:11px;color:var(--tx2);font-family:var(--mono);margin-bottom:6px}
+    .card-desc{font-size:12px;color:var(--tx1);line-height:1.5}
+    .tag{display:inline-block;margin-top:7px;font-size:9px;font-weight:600;font-family:var(--mono);padding:2px 7px;border-radius:3px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.15);color:var(--blue)}
+    .team{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin:24px 0 40px}
+    .member{background:rgba(12,16,24,.7);border:1px solid var(--bdr);border-radius:7px;padding:14px 20px;text-align:center;min-width:140px}
+    .mem-name{font-family:var(--mono);font-weight:600;margin-bottom:4px}
+    .mem-role{font-size:10px;color:var(--blue);letter-spacing:.06em;text-transform:uppercase}
+    footer{font-size:12px;color:var(--tx2);margin-top:24px}
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="badge"><div class="dot"></div> Network Monitoring & SOC</div>
+  <h1>NetMon SOC</h1>
+  <p class="sub">Giám sát hạ tầng mạng thời gian thực · Phát hiện xâm nhập Suricata · AI anomaly detection</p>
+  <a href="/dashboard" class="cta">Mở Dashboard →</a>
+
+  <div class="stats">
+    <div class="stat"><span class="stat-num">{{ devices|length }}</span><div class="stat-label">Devices</div></div>
+    <div class="divider"></div>
+    <div class="stat"><span class="stat-num">15s</span><div class="stat-label">Refresh</div></div>
+    <div class="divider"></div>
+    <div class="stat"><span class="stat-num">IDS</span><div class="stat-label">Suricata</div></div>
+    <div class="divider"></div>
+    <div class="stat"><span class="stat-num">AI</span><div class="stat-label">Groq LLM</div></div>
+    <div class="divider"></div>
+    <div class="stat"><span class="stat-num">{{ members|length }}</span><div class="stat-label">Members</div></div>
+  </div>
+
+  <div class="grid">
+    {% for d in devices %}
+    <div class="card">
+      <div class="card-name">{{ d.name }}</div>
+      <div class="card-ip">{{ d.ip }}</div>
+      <div class="card-desc">{{ d.description }}</div>
+      <div class="tag">{{ d.type }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="team">
+    {% for key, m in members.items() %}
+    <div class="member">
+      <div class="mem-name">{{ m.name }}</div>
+      <div class="mem-role">{{ 'Leader' if m.role == 'leader' else 'Member' }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <footer>NetMon SOC · Prometheus + SNMP + Suricata + Groq + PostgreSQL</footer>
+</div>
+</body>
+</html>

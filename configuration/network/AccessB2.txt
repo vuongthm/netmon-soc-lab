@@ -1,0 +1,24 @@
+enable
+configure terminal
+hostname AccessB2
+enable secret cisco
+no ip domain-lookup
+vlan 40
+ name Engineering
+exit
+interface e0/0
+ description Uplink-To-SwitchL3B-e0/2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 40
+ duplex full
+ no shutdown
+exit
+interface e0/3
+ description To-VPC-vlan40
+ switchport mode access
+ switchport access vlan 40
+ spanning-tree portfast
+ no shutdown
+end
+write memory

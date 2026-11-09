@@ -1,0 +1,83 @@
+enable
+configure terminal
+hostname SwitchL3B
+enable secret cisco
+ip domain-lookup
+ip domain-name lab.local
+ip name-server 8.8.8.8
+ip name-server 8.8.4.4
+ip routing
+interface Loopback0
+ description Management
+ ip address 10.20.0.3 255.255.255.255
+ no shutdown
+exit
+interface e0/0
+ description To-Core-Router-e0/2
+ no switchport
+ ip address 10.20.2.2 255.255.255.252
+ no shutdown
+exit
+vlan 30
+ name HR
+exit
+vlan 40
+ name Engineering
+exit
+interface e0/3
+ description To-AccessB1-e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 30
+ no shutdown
+exit
+interface e0/2
+ description To-AccessB2-e0/0
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 40
+ no shutdown
+exit
+interface range e0/2 - 3
+ duplex full
+exit
+interface Vlan30
+ description Gateway-HR
+ ip address 10.20.30.1 255.255.255.0
+ no shutdown
+exit
+interface Vlan40
+ description Gateway-Engineering
+ ip address 10.20.40.1 255.255.255.0
+ no shutdown
+exit
+ip dhcp excluded-address 10.20.30.1 10.20.30.99
+ip dhcp excluded-address 10.20.30.201 10.20.30.254
+ip dhcp pool VLAN30-HR
+ network 10.20.30.0 255.255.255.0
+ default-router 10.20.30.1
+ dns-server 10.20.201.10 8.8.8.8
+ domain-name lab.local
+ lease 0 8
+exit
+ip dhcp excluded-address 10.20.40.1 10.20.40.99
+ip dhcp excluded-address 10.20.40.201 10.20.40.254
+ip dhcp pool VLAN40-Engineering
+ network 10.20.40.0 255.255.255.0
+ default-router 10.20.40.1
+ dns-server 10.20.201.10 8.8.8.8
+ domain-name lab.local
+ lease 0 8
+exit
+router ospf 1
+ router-id 3.3.3.3
+ network 10.20.0.3 0.0.0.0 area 0
+ network 10.20.2.0 0.0.0.3 area 0
+ network 10.20.30.0 0.0.0.255 area 0
+ network 10.20.40.0 0.0.0.255 area 0
+exit
+snmp-server community public RO
+logging host 10.20.201.10
+logging trap informational
+end
+write memory

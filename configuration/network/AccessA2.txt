@@ -1,0 +1,24 @@
+enable
+configure terminal
+hostname AccessA2
+enable secret cisco
+no ip domain-lookup
+vlan 20
+ name Sales
+exit
+interface e0/0
+ description Uplink-To-SwitchL3A-e0/2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 20
+ duplex full
+ no shutdown
+exit
+interface e0/3
+ description To-VPC-vlan20
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+ no shutdown
+end
+write memory

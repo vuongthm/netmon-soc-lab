@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}AI Agent — NetMon SOC{% endblock %}
+{% block page_title %}🤖 AI Agent{% endblock %}
+
+{% block content %}
+<div class="ai-grid">
+
+  <!-- Left: Status + Scan + Models -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">AI Status</div></div>
+      <div class="card-body" id="ai-status-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">🔍 Anomaly Scanner</div></div>
+      <div class="card-body">
+        <button class="btn-primary" id="scan-btn" onclick="runScan()">Run Scan</button>
+        <div id="scan-results" style="font-size:13px;color:var(--tx-2)">
+          Click to scan all devices with Isolation Forest.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">📦 ML Models</div></div>
+      <div class="card-body">
+        <div class="model-grid" id="model-grid">
+          <div class="loading">Loading...</div>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:var(--tx-2);line-height:1.6">      
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Right: Chat -->
+  <div class="card chatbox" style="max-height:525px">
+    <div class="card-header">
+      <div class="card-title">
+        <div class="dot dot-green"></div>
+        Network AI Assistant
+      </div>
+      <button onclick="resetChat()" style="background:transparent;border:1px solid var(--bdr-2);color:var(--tx-2);font-size:11px;padding:3px 9px;border-radius:var(--radius-sm)">
+        🔄 Reset
+      </button>
+    </div>
+
+    <div class="chat-history" id="chat-history">
+      <div>
+        <div class="msg-role">Assistant</div>
+        <div class="msg-ai">
+          Xin chào! Tôi là AI assistant phân tích hạ tầng mạng dựa trên dữ liệu <b>Prometheus live</b>.<br><br>
+          Thử hỏi:<br>
+          <span class="quick-link" onclick="ask('tổng quan hệ thống hiện tại')">Tổng quan hệ thống</span><br>
+          <span class="quick-link" onclick="ask('thiết bị nào đang có vấn đề?')">Thiết bị có vấn đề</span><br>
+          <span class="quick-link" onclick="ask('interface nào đang down?')">Interface đang down</span><br>
+          <span class="quick-link" onclick="ask('trạng thái CPU và RAM của server')">Server resources</span><br>
+          <span class="quick-link" onclick="ask('phân tích traffic bất thường')">Phân tích traffic</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-footer">
+      <input class="chat-input" id="chat-input"
+        placeholder="Hỏi về hạ tầng mạng..."
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}">
+      <button class="btn-send" onclick="send()">➤</button>
+    </div>
+    <div style="padding:4px 12px 8px;font-size:11px;color:var(--tx-2)">
+      Nguồn: Prometheus realtime + Isolation Forest &middot;
+      <span id="ai-src" style="color:var(--blue)">—</span>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Status ────────────────────────────────────────────────────────────
+async function loadStatus() {
+  const d    = await (await fetch("/api/ai/status")).json();
+  const body = document.getElementById("ai-status-body");
+  body.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:7px;font-size:13px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--tx-1)">Groq LLM</span>
+        <span style="color:${d.groq_ok?"var(--green)":"var(--red)"};font-weight:600">
+          ${d.groq_ok?" Ready":" Not configured"}
+        </span>
+      </div>
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--tx-1)">ML Models</span>
+        <span style="color:${d.loaded>0?"var(--green)":"var(--yellow)"};font-weight:600">
+          ${d.loaded}/${d.total} loaded
+        </span>
+      </div>
+    </div>`;
+
+  const grid = document.getElementById("model-grid");
+  grid.innerHTML = Object.entries(d.models||{}).map(([m,ok])=>`
+    <div class="model-item">
+      <div class="dot ${ok?"dot-green":"dot-grey"}"></div>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m}</span>
+    </div>`).join("");
+}
+
+// ── Scan ──────────────────────────────────────────────────────────────
+async function runScan() {
+  const btn = document.getElementById("scan-btn");
+  const res = document.getElementById("scan-results");
+  btn.disabled = true; btn.textContent = "Loading...";
+  res.innerHTML = `<div class="loading">AI is analyzing all devices...</div>`;
+  try {
+    const d = await (await fetch("/api/ai/scan")).json();
+    if (d.anomalies?.length) {
+      res.innerHTML = d.anomalies.map(a => {
+        const col = a.severity === "critical" ? "var(--red)" : "var(--yellow)";
+        return `<div style="padding:7px 0;border-bottom:1px solid var(--bdr-1)">
+          <span style="color:${col};font-weight:600">[${a.severity.toUpperCase()}]</span>
+          <span style="margin-left:5px;color:var(--tx-0)">${a.device}</span>
+          <div style="font-size:12px;color:var(--tx-1);margin-top:2px">${a.message}</div>
+        </div>`;
+      }).join("");
+    } else {
+      res.innerHTML = `<div style="color:var(--green)"> No anomalies detected.</div>`;
+    }
+  } catch(exc) {
+    res.innerHTML = `<div style="color:var(--red)">Error: ${exc.message}</div>`;
+  }
+  btn.disabled = false; btn.textContent = "Run Scan";
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────
+function addMsg(role, content) {
+  const hist = document.getElementById("chat-history");
+  const div  = document.createElement("div");
+  if (role === "user") {
+    div.className = "msg-user";
+    div.innerHTML = `<div class="msg-user-bubble">${escHtml(content)}</div>`;
+  } else {
+    const formatted = content
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/\n/g,"<br>")
+      .replace(/\*\*(.*?)\*\*/g,"<b>$1</b>")
+      .replace(/`(.*?)`/g,`<code style="font-family:var(--font-mono);background:var(--bg-3);padding:1px 4px;border-radius:3px">$1</code>`);
+    div.innerHTML = `<div class="msg-role">Assistant</div><div class="msg-ai">${formatted}</div>`;
+  }
+  hist.appendChild(div);
+  hist.scrollTop = hist.scrollHeight;
+}
+
+function escHtml(t) {
+  return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function ask(q) { document.getElementById("chat-input").value = q; send(); }
+
+async function send() {
+  const inp = document.getElementById("chat-input");
+  const q   = inp.value.trim();
+  if (!q) return;
+  inp.value = "";
+  addMsg("user", q);
+
+  const loadId = "ld-" + Date.now();
+  const hist   = document.getElementById("chat-history");
+  const ldiv   = document.createElement("div");
+  ldiv.id      = loadId;
+  ldiv.innerHTML = `<div class="msg-role">Assistant</div>
+    <div class="msg-ai"><div class="loading" style="padding:0">Loading...</div></div>`;
+  hist.appendChild(ldiv);
+  hist.scrollTop = hist.scrollHeight;
+
+  try {
+    const r = await fetch("/api/ai/chat", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({question: q}),
+    });
+    const d = await r.json();
+    document.getElementById(loadId)?.remove();
+    addMsg("ai", d.status==="ok" ? d.answer : `Error: ${d.message}`);
+    document.getElementById("ai-src").textContent = d.source || "—";
+  } catch(exc) {
+    document.getElementById(loadId)?.remove();
+    addMsg("ai", `Network error: ${exc.message}`);
+  }
+}
+
+async function resetChat() {
+  await fetch("/api/ai/chat/reset", {method:"POST"});
+  const hist = document.getElementById("chat-history");
+  hist.innerHTML = `<div><div class="msg-role">Assistant</div>
+    <div class="msg-ai">Chat đã được reset. Hỏi tôi về hạ tầng mạng nhé!</div></div>`;
+  document.getElementById("ai-src").textContent = "—";
+}
+
+loadStatus();
+</script>
+{% endblock %}

@@ -1,0 +1,46 @@
+enable
+configure terminal
+hostname Core-Router
+enable secret cisco
+ip domain-lookup
+ip domain-name lab.local
+ip name-server 8.8.8.8
+ip name-server 8.8.4.4
+interface Loopback0
+ description Management
+ ip address 10.20.0.1 255.255.255.255
+ no shutdown
+exit
+interface e0/0
+ description To-pfSense-e2
+ ip address 10.20.255.1 255.255.255.0
+ no shutdown
+exit
+interface e0/1
+ shutdown
+exit
+interface e0/2
+ description To-SwitchL3B-e0/0
+ ip address 10.20.2.1 255.255.255.252
+ no shutdown
+exit
+interface e0/3
+ description To-SwitchL3A-e0/0
+ ip address 10.20.1.1 255.255.255.252
+ no shutdown
+exit
+ip route 0.0.0.0 0.0.0.0 10.20.255.254
+router ospf 1
+ router-id 1.1.1.1
+ default-information originate always
+ network 10.20.0.1 0.0.0.0 area 0
+ network 10.20.255.0 0.0.0.255 area 0
+ network 10.20.1.0 0.0.0.3 area 0
+ network 10.20.2.0 0.0.0.3 area 0
+exit
+snmp-server community public RO
+logging host 10.20.201.10
+logging trap informational
+logging on
+end
+write memory

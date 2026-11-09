@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+{% block title %}SOC / IDS — NetMon SOC{% endblock %}
+{% block page_title %}🛡️ SOC — Suricata IDS{% endblock %}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- KPI Row -->
+<div class="soc-grid" id="soc-kpi">
+  <div class="loading">Loading...</div>
+</div>
+
+<!-- Controls -->
+<div class="sticky-bar">
+  <button class="btn-filter active" onclick="setSevFilter('all',this)">All</button>
+  <button class="btn-filter" onclick="setSevFilter('critical',this)">Critical</button>
+  <button class="btn-filter" onclick="setSevFilter('warning',this)">Warning</button>
+  <button class="btn-filter" onclick="setSevFilter('info',this)">Info</button>
+  <div style="width:1px;height:22px;background:var(--bdr-1);margin:0 4px"></div>
+  <select class="select-sm" id="hours-select" onchange="loadEvents()">
+    <option value="1">1 hour</option>
+    <option value="6">6 hours</option>
+    <option value="24" selected>24 hours</option>
+    <option value="72">3 days</option>
+    <option value="168">7 days</option>
+  </select>
+  <div style="margin-left:auto">
+    <button class="btn-chart" onclick="toggleTimeline()">📈 Timeline</button>
+  </div>
+</div>
+
+<!-- Timeline (collapse/expand) -->
+<div id="timeline-section" style="display:none;margin-bottom:18px">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Alert Timeline</div>
+      <select class="select-sm" id="tl-bucket" onchange="loadTimeline()">
+        <option value="60">By Hour</option>
+        <option value="1440">By Day</option>
+      </select>
+    </div>
+    <div class="card-body" style="height:220px;position:relative">
+      <canvas id="timeline-chart"></canvas>
+    </div>
+    <div style="padding:8px 14px 10px;font-size:11px;color:var(--tx-2);border-top:1px solid var(--bdr-1)"
+         id="tl-summary"></div>
+  </div>
+</div>
+
+<!-- Two columns: Events table + Top Attackers -->
+<div style="display:grid;grid-template-columns:1fr 280px;gap:16px;align-items:start">
+
+  <!-- Events table -->
+  <div class="soc-table-wrap">
+    <div class="alert-list-header">
+      <span style="font-size:13px;font-weight:600;color:var(--tx-0)">
+        IDS Events — <span id="events-count">—</span>
+      </span>
+      <span style="font-size:11px;color:var(--tx-2)" id="last-updated">—</span>
+    </div>
+    <div class="soc-scroll">
+      <table class="soc-table">
+        <thead><tr>
+          <th>Time</th><th>Interface</th><th>Src IP</th><th>Dest</th>
+          <th>Severity</th><th>Category</th><th>Signature</th><th>Action</th>
+        </tr></thead>
+        <tbody id="soc-tbody">
+          <tr><td colspan="8"><div class="loading" style="padding:16px">Loading...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Right panel -->
+  <div style="display:flex;flex-direction:column;gap:12px">
+
+    <!-- By Interface breakdown -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🌐 By Interface</div></div>
+      <div class="card-body" id="by-interface">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Top Attackers -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🎯 Top Attackers</div></div>
+      <div class="card-body" id="top-attackers">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Top Signatures -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">📋 Top Signatures</div></div>
+      <div class="card-body" id="top-sigs">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Top Categories -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">📂 Top Categories</div></div>
+      <div class="card-body" id="top-cats">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Attacker Detail Modal -->
+<div class="modal-overlay" id="attacker-modal" onclick="if(event.target===this)closeAttacker()">
+  <div class="modal-box" style="width:min(720px,96vw);max-height:90vh;overflow-y:auto">
+    <div class="modal-header">
+      <div class="modal-title" id="attacker-title">IP Details</div>
+      <button class="btn-close" onclick="closeAttacker()">✕</button>
+    </div>
+    <div id="attacker-body"><div class="loading">Loading...</div></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _sevFilter = "all", _tlChart = null, _tlVisible = false;
+
+const SEV_COLOR = {critical:"var(--red)",warning:"var(--yellow)",info:"var(--blue)"};
+const SEV_TAG_CLS = {critical:"sev-critical",warning:"sev-warning",info:"sev-info"};
+
+function fmtTs(iso) {
+  if(!iso) return "—";
+  const d = new Date(iso);
+  return `${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}<br>
+    <span style="font-size:10px;color:var(--tx-2)">${d.getDate()}/${d.getMonth()+1}</span>`;
+}
+
+// ── KPI ──────────────────────────────────────────────────────────────
+async function loadKpi() {
+  const hours = document.getElementById("hours-select").value;
+  const d     = await (await fetch(`/api/soc/stats?hours=${hours}`)).json();
+
+  document.getElementById("soc-kpi").innerHTML = `
+    <div class="kpi-card"><div class="kpi-label">Total events</div><div class="kpi-value">${d.total||0}</div></div>
+    <div class="kpi-card red"><div class="kpi-label">Critical</div><div class="kpi-value">${d.critical||0}</div></div>
+    <div class="kpi-card yellow"><div class="kpi-label">Warning</div><div class="kpi-value">${d.warning||0}</div></div>
+    <div class="kpi-card teal"><div class="kpi-label">Info</div><div class="kpi-value">${d.info||0}</div></div>
+    <div class="kpi-card ${(d.events_last_hour||0)>0?"red":""}">
+      <div class="kpi-label">Last hour</div>
+      <div class="kpi-value">${d.events_last_hour||0}</div>
+    </div>`;
+
+  // ── By Interface panel ────────────────────────────────────────────
+  const zoneColor = {wan:"var(--red)",dmzweb:"var(--yellow)","dmz-web":"var(--yellow)",
+                     "dmz-dns-ftp":"var(--purple)",lan:"var(--blue)",zt:"var(--teal)",unknown:"var(--tx-2)"};
+  const byIface = d.by_interface || [];
+  document.getElementById("by-interface").innerHTML = byIface.length
+    ? byIface.map(i => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bdr-1)">
+          <div>
+            <span style="font-size:12px;font-weight:600;color:var(--tx-0)">${i.interface||"?"}</span>
+            <span style="font-size:10px;color:${zoneColor[i.zone]||"var(--tx-2)"};margin-left:6px;
+                         background:rgba(255,255,255,.06);padding:1px 6px;border-radius:3px">${i.zone||""}</span>
+          </div>
+          <span style="font-size:13px;font-weight:700;color:var(--blue)">${i.count}</span>
+        </div>`).join("")
+    : `<div style="color:var(--tx-2);font-size:12px;padding:8px">No data available</div>`;
+
+  // ── Top panels ────────────────────────────────────────────────────
+  const renderTop = (items, keyName) => items?.length
+    ? items.map(i=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bdr-1)">
+          <span class="${keyName==="src_ip"?"ip-link":""}" style="font-size:11px;font-family:var(--font-mono);color:var(--tx-0)"
+            ${keyName==="src_ip"?`onclick="openAttacker('${i.key}')"`:""}>
+            ${(i.key||"—").substring(0,50)}
+          </span>
+          <span style="font-size:11px;font-weight:700;color:var(--blue);margin-left:8px;white-space:nowrap">${i.count}</span>
+        </div>`).join("")
+    : `<div style="color:var(--tx-2);font-size:12px;padding:8px">No data available</div>`;
+
+  document.getElementById("top-attackers").innerHTML = renderTop(d.top_attackers, "src_ip");
+  document.getElementById("top-sigs").innerHTML      = renderTop(d.top_signatures, "sig");
+  document.getElementById("top-cats").innerHTML      = renderTop(d.top_categories, "cat");
+
+  if (d.last_updated) {
+    const t = new Date(d.last_updated);
+    document.getElementById("last-updated").textContent = `Last updated: ${t.toLocaleTimeString("vi-VN")}`;
+  }
+}
+
+// ── Events table ──────────────────────────────────────────────────────
+function setSevFilter(val, btn) {
+  _sevFilter = val;
+  document.querySelectorAll(".sticky-bar .btn-filter").forEach(b => b.className="btn-filter");
+  btn.className = "btn-filter active";
+  if(val==="critical") btn.className += " active-red";
+  if(val==="warning")  btn.className += " active-yellow";
+  loadEvents();
+}
+
+async function loadEvents() {
+  const hours = document.getElementById("hours-select").value;
+  let url = `/api/soc/events?limit=200&hours=${hours}`;
+  if (_sevFilter !== "all") url += `&severity=${_sevFilter}`;
+
+  const d    = await (await fetch(url)).json();
+  const tbody = document.getElementById("soc-tbody");
+  document.getElementById("events-count").textContent = `${d.total} events`;
+
+  if (!d.events?.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty"><div class="empty-head">No IDS events</div><div>No attacks detected</div></div></td></tr>`;
+    return;
+  }
+
+  // Màu zone cho badge interface
+  const zoneClr = {wan:"var(--red)","dmz-web":"var(--yellow)","dmz-dns-ftp":"var(--purple)",
+                   lan:"var(--blue)",zt:"var(--teal)",unknown:"var(--tx-2)"};
+
+  tbody.innerHTML = d.events.map(ev => {
+    const tc     = SEV_TAG_CLS[ev.severity] || "sev-info";
+    const ac     = ev.action === "blocked" ? "var(--red)" : "var(--green)";
+    const ifName = ev.interface_name || "?";
+    const zone   = ev.zone || "";
+    const ifClr  = zoneClr[zone] || "var(--tx-2)";
+    return `<tr>
+      <td style="font-family:var(--font-mono);font-size:11px;white-space:nowrap">${fmtTs(ev.timestamp)}</td>
+      <td>
+        <span style="font-size:11px;font-weight:600;color:${ifClr}">${ifName}</span>
+      </td>
+      <td><span class="ip-link" onclick="openAttacker('${ev.src_ip}')">${ev.src_ip}:${ev.src_port||""}</span></td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--tx-1)">${ev.dest_ip}:${ev.dest_port||""}</td>
+      <td><span class="sev-tag ${tc}">${ev.severity.toUpperCase()}</span></td>
+      <td style="font-size:11px;color:var(--tx-2)">${ev.category||"—"}</td>
+      <td style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ev.signature}">${ev.signature||"—"}</td>
+      <td style="font-size:11px;font-weight:600;color:${ac}">${ev.action||"—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Timeline (line chart — giống alerts) ─────────────────────────────
+function toggleTimeline() {
+  _tlVisible = !_tlVisible;
+  document.getElementById("timeline-section").style.display = _tlVisible ? "block" : "none";
+  if (_tlVisible) loadTimeline();
+}
+
+async function loadTimeline() {
+  const hours  = parseInt(document.getElementById("hours-select").value);
+  const bucket = parseInt(document.getElementById("tl-bucket").value);
+  const d      = await (await fetch(`/api/soc/timeline?hours=${hours}&bucket_minutes=${bucket}`)).json();
+  const series = d.timeline || [];
+
+  const dark = !document.body.classList.contains("light");
+  const grid = dark ? "rgba(28,42,58,.6)" : "rgba(0,0,0,.07)";
+  const tick = dark ? "#4b6a8a" : "#64748b";
+
+  if (_tlChart) _tlChart.destroy();
+  _tlChart = new Chart(document.getElementById("timeline-chart").getContext("2d"), {
+    type: "line",   // ← line thay vì bar
+    data: {
+      labels: series.map(s => s.label),
+      datasets: [
+        {
+          label: "Critical",
+          data: series.map(s => s.critical || 0),
+          borderColor: "#ef4444",
+          backgroundColor: "rgba(239,68,68,.08)",
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.35,
+          fill: true,
+        },
+        {
+          label: "Warning",
+          data: series.map(s => s.warning || 0),
+          borderColor: "#eab308",
+          backgroundColor: "rgba(234,179,8,.06)",
+          borderWidth: 2,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.35,
+          fill: true,
+        },
+        {
+          label: "Info",
+          data: series.map(s => s.info || 0),
+          borderColor: "#3b82f6",
+          backgroundColor: "rgba(59,130,246,.05)",
+          borderWidth: 2,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          tension: 0.35,
+          fill: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: tick, font: { size: 11 } } },
+        tooltip: { mode: "index", intersect: false },
+      },
+      scales: {
+        x: { ticks: { color: tick, maxTicksLimit: 12 }, grid: { color: grid } },
+        y: { beginAtZero: true, ticks: { color: tick, precision: 0 }, grid: { color: grid },
+             title: { display: true, text: "Số events", color: tick, font: { size: 10 } } },
+      },
+    },
+  });
+
+  // Summary dưới chart
+  const tc = series.reduce((a,s) => a + (s.critical||0), 0);
+  const tw = series.reduce((a,s) => a + (s.warning||0),  0);
+  const ti = series.reduce((a,s) => a + (s.info||0),     0);
+  const summaryEl = document.getElementById("tl-summary");
+  if (summaryEl) {
+    summaryEl.textContent =
+      `Tổng: ${tc+tw+ti}  |  Critical: ${tc}  |  Warning: ${tw}  |  Info: ${ti}`;
+  }
+}
+
+// ── Attacker Detail ───────────────────────────────────────────────────
+async function openAttacker(ip) {
+  document.getElementById("attacker-title").textContent = `🎯 Chi tiết IP: ${ip}`;
+  document.getElementById("attacker-body").innerHTML = `<div class="loading">Đang tải...</div>`;
+  document.getElementById("attacker-modal").style.display = "flex";
+
+  try {
+    const resp = await fetch(`/api/soc/attacker/${encodeURIComponent(ip)}`);
+
+    // Đọc text trước, parse JSON sau — tránh lỗi "unexpected character"
+    // khi server trả về HTML error page thay vì JSON
+    const text = await resp.text();
+    let d;
+    try {
+      d = JSON.parse(text);
+    } catch (_) {
+      document.getElementById("attacker-body").innerHTML =
+        `<div style="color:var(--red);font-size:12px">
+           Server trả về lỗi không phải JSON.<br>
+           <code style="font-size:10px;color:var(--tx-2)">${text.substring(0,200)}</code>
+         </div>`;
+      return;
+    }
+
+    if (!resp.ok || d.error) {
+      document.getElementById("attacker-body").innerHTML =
+        `<div style="color:var(--tx-2);padding:12px">${d.error || "Không tìm thấy dữ liệu"}</div>`;
+      return;
+    }
+
+    document.getElementById("attacker-body").innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+        <div class="metric-box"><div class="mb-label">Tổng events</div><div class="mb-value" style="font-size:22px;color:var(--red)">${d.total_events}</div></div>
+        <div class="metric-box"><div class="mb-label">Lần đầu</div><div class="ex-val" style="font-size:11px;margin-top:4px">${d.first_seen?new Date(d.first_seen).toLocaleString("vi-VN"):"—"}</div></div>
+        <div class="metric-box"><div class="mb-label">Lần cuối</div><div class="ex-val" style="font-size:11px;margin-top:4px">${d.last_seen?new Date(d.last_seen).toLocaleString("vi-VN"):"—"}</div></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div>
+          <div class="sec-label">Top Signatures</div>
+          ${(d.top_signatures||[]).map(s=>`
+            <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bdr-1);font-size:11px">
+              <span style="color:var(--tx-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${s.sig}">${s.sig||"—"}</span>
+              <span style="color:var(--red);font-weight:700;margin-left:8px">${s.count}</span>
+            </div>`).join("")}
+        </div>
+        <div>
+          <div class="sec-label">Ports mục tiêu</div>
+          ${(d.target_ports||[]).map(p=>`
+            <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bdr-1);font-size:11px">
+              <span style="font-family:var(--font-mono);color:var(--blue)">:${p.port||"?"}</span>
+              <span style="color:var(--tx-1);font-weight:700">${p.count}</span>
+            </div>`).join("")}
+        </div>
+      </div>
+
+      <div class="sec-label">20 Events gần nhất</div>
+      <div style="max-height:280px;overflow-y:auto">
+        <table class="soc-table">
+          <thead><tr><th>Thời gian</th><th>Dest</th><th>Mức độ</th><th>Signature</th></tr></thead>
+          <tbody>
+            ${(d.recent_events||[]).map(ev=>`<tr>
+              <td style="font-family:var(--font-mono);font-size:10px;white-space:nowrap">${new Date(ev.timestamp).toLocaleString("vi-VN")}</td>
+              <td style="font-family:var(--font-mono);font-size:10px">${ev.dest_ip}:${ev.dest_port||""}</td>
+              <td><span class="sev-tag ${SEV_TAG_CLS[ev.severity]||"sev-info"}" style="font-size:9px">${ev.severity}</span></td>
+              <td style="font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ev.signature}">${ev.signature||"—"}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(exc) {
+    document.getElementById("attacker-body").innerHTML = `<div style="color:var(--red)">Lỗi: ${exc.message}</div>`;
+  }
+}
+function closeAttacker() { document.getElementById("attacker-modal").style.display = "none"; }
+
+// ── Boot ──────────────────────────────────────────────────────────────
+async function refresh() { await Promise.all([loadKpi(), loadEvents()]); }
+refresh();
+setInterval(refresh, 10000);
+</script>
+{% endblock %}
